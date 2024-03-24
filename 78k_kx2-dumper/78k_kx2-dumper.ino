@@ -7,17 +7,10 @@ SoftwareSerial _uart_serial(UART_RX_PIN, UART_TX_PIN);
 #define UART_SERIAL (_uart_serial)
 #define FLMD0_PIN 2
 #define RESET_PIN 3  // (Inverted)
-#define OCDA_PIN 4
-#define OCDB_PIN 5
-#define PWM_PIN OCDB_PIN  // TO EXCLK
+#define OCDA_PIN 4  // Not using these yet.
+#define OCDB_PIN 5  // Not using these yet.
+#define PWM_PIN 5  // TO EXCLK
 #define POWER_PIN 7  // TO VDD (3.3V)
-
-#define CPU_RESTART_ADDR (uint32_t *)0xE000ED0C
-#define CPU_RESTART_VAL 0x5FA0004
-#define CPU_RESTART (*CPU_RESTART_ADDR = CPU_RESTART_VAL);
-
-// The RESET command should return exactly this data.
-#define PURE_ACK ("\x02\x01\x06\xF9\x03")
 
 typedef enum {
   SUCCESS = 0,
@@ -33,6 +26,7 @@ const int bitTime = 8500; // Time for one bit in nanoseconds
 char sbuf[257] = { 0 };
 byte res[259];
 size_t res_sz = 0;
+byte block[1024] = { 0 };
 
 void
 setup ()
@@ -64,30 +58,114 @@ r78kkx2_work (void)
   comm_error_t err = SUCCESS;
   byte stat = 0;
 
-  // GET SILICON SIGNATURE COMMAND
+  // SILICON SIGNATURE COMMAND
   err = tx_command(0xC0, NULL, 0);
   if (!err) err = rx_status(&stat);
-  if (stat != 6 || err)
+  if ((stat != 6) || err)
   {
     Serial.print("Bad SiSig: ");
     if (err) err_print(err);
     else Serial.println(stat);
     return;
   }
+  res_sz = sizeof(res);
+  err = rx_data(res, &res_sz);
+  if (err)
+  {
+    Serial.print("Bad SiSig data: ");
+    err_print(err);
+    return;
+  }
   else
   {
-    res_sz = sizeof(res);
-    err = rx_data(res, &res_sz);
+    Serial.println("SiSig OK:");
+    print_hexbuf(res, res_sz);
+  }
+
+  // VERIFY COMMAND
+  int pages256 = 4;
+  byte cmd[6] = { 0 };
+  cmd[4] = pages256 - 1;
+  cmd[5] = 0xFF;
+  err = tx_command(0x13, cmd, sizeof(cmd));
+  if (!err) err = rx_status(&stat);
+  if (stat != 6 || err)
+  {
+    Serial.print("Bad Verify status: ");
+    if (err) err_print(err);
+    else Serial.println(stat);
+    return;
+  }
+  for (int i = 0; i < pages256; i++)
+  {
+    delayMicroseconds(12);
+    err = tx_data(block, 256, ((i == (pages256 - 1)) ? false : true));
     if (err)
     {
-      Serial.print("Bad SiSig data: ");
+      Serial.print("Failed to transmit Verify data: ");
       err_print(err);
+      return;
+    }
+    res_sz = sizeof(res);
+    err = rx_data(res, &res_sz);
+    if ((res[0] != 6) || (res_sz != 2) || err)
+    {
+      Serial.print("Bad Verify result: ");
+      if (err) err_print(err);
+      else Serial.println(stat);
       return;
     }
     else
     {
-      Serial.println("SiSig OK:");
-      print_hexbuf(res, res_sz);
+      Serial.print("Verify result (");
+      Serial.print(i);
+      Serial.print("): ");
+      Serial.println(res[1]);
+    }
+  }
+  return;
+
+  // VERIFY TOMFOOLERY
+  cmd[0] = 0;
+  cmd[1] = 0;
+  cmd[2] = 0;
+  cmd[3] = 0;
+  cmd[4] = 0;
+  cmd[5] = 0xFF;
+  Serial.println("---");
+  for (int i = 0; i < 256; i++)
+  {
+    err = tx_command(0x13, cmd, sizeof(cmd));
+    if (!err) err = rx_status(&stat);
+    if (stat != 6 || err)
+    {
+      Serial.print("Bad Verify status: ");
+      if (err) err_print(err);
+      else Serial.println(stat);
+      return;
+    }
+    delayMicroseconds(12);
+    block[0] = i;
+    err = tx_data(block, 256, false);
+    if (err)
+    {
+      Serial.print("Failed to transmit Verify data: ");
+      err_print(err);
+      return;
+    }
+    res_sz = sizeof(res);
+    err = rx_data(res, &res_sz);
+    if ((res[0] != 6) || (res_sz != 2) || err)
+    {
+      Serial.print("Bad Verify result: ");
+      if (err) err_print(err);
+      else Serial.println(stat);
+      return;
+    }
+    else
+    {
+      Serial.print("Verify result: ");
+      Serial.println(res[1]);
     }
   }
 }
@@ -156,7 +234,7 @@ r78kkx2_init (void)
     return false;
   }
   err = rx_status(&stat);
-  if (stat != 6 || err)
+  if ((stat != 6) || err)
   {
     Serial.print("Bad Reset: ");
     if (err) err_print(err);
@@ -175,7 +253,7 @@ r78kkx2_init (void)
   UART_SERIAL.flush();
   UART_SERIAL.begin(115200); // Tool port changes rate
   err = rx_status(&stat);
-  if (stat != 6 || err)
+  if ((stat != 6) || err)
   {
     Serial.print("Bad Set Fosc: ");
     if (err) err_print(err);
@@ -416,63 +494,100 @@ tx_command (byte cmd, const byte * data, size_t data_len)
 
 
 comm_error_t
-tx_data (const byte * data, size_t data_len)
+tx_data (const byte * data, size_t data_len, bool continues)
 {
   byte len_byte, sum;
-  size_t i, out;
+  size_t i, out, len_now, frame = 0;
 
   if ((data == NULL) && (data_len > 0))
   {
     Serial.println("tx_data error: BAD_PARAM");
     return BAD_PARAM;
   }
-  if (data_len > 256)
-  {
-    // We CAN support this, but don't yet.
-    Serial.print("tx_data error: TOO_LONG (");
-    Serial.print(data_len);
-    Serial.println(")");
-    return TOO_LONG;
-  }
-  if (data_len == 256)
-  {
-    len_byte = 0;
-  }
-  else
-  {
-    len_byte = data_len;
-  }
 
-  sum = 0 - len_byte;
-  for (i = 0; i < data_len; i++)
+  while (data_len > 0)
   {
-    sum -= data[i];
-  }
+    if (data_len > 0xFFFFFF)
+    {
+      // Sanity check + 78K/Kx2 only has 24-bit address space
+      Serial.print("tx_data error: TOO_LONG (");
+      Serial.print(data_len);
+      Serial.println(")");
+      return TOO_LONG;
+    }
+    if (data_len > 256)
+    {
+      len_now = 256;
+    }
+    else
+    {
+      len_now = data_len;
+    }
+    data_len -= len_now;
 
-  dump_buf[0] = '\x02';  // STX
-  dump_buf[1] = len_byte;
-  memcpy(&dump_buf[2], data, data_len);
-  dump_buf[data_len + 2] = sum;
-  dump_buf[data_len + 3] = '\x03';  // ETX
-  dump_sz = data_len + 4;
-  out = 0;
-  for (i = 0; i < dump_sz; i++)
-  {
-    out += UART_SERIAL.write(dump_buf[i]);
-    UART_SERIAL.flush();
-    // flush because there's supposed to be a >=10us delay between bytes
-  }
+    if (len_now == 256)
+    {
+      len_byte = 0;
+    }
+    else
+    {
+      len_byte = len_now;
+    }
+  
+    sum = 0 - len_byte;
+    for (i = 0; i < len_now; i++)
+    {
+      sum -= data[i];
+    }
+  
+    dump_buf[0] = '\x02';  // STX
+    dump_buf[1] = len_byte;
+    memcpy(&dump_buf[2], data, len_now);
+    dump_buf[len_now + 2] = sum;
+    if ((data_len > 0) || (continues))
+    {
+      // More frames to follow
+      dump_buf[len_now + 3] = '\x17';  // ETB
+    }
+    else
+    {
+      // Final (maybe only) frame
+      dump_buf[len_now + 3] = '\x03';  // ETX
+    }
+    dump_sz = len_now + 4;
+    out = 0;
+    for (i = 0; i < dump_sz; i++)
+    {
+      out += UART_SERIAL.write(dump_buf[i]);
+      UART_SERIAL.flush();
+      // flush because there's supposed to be a >=10us delay between bytes
+    }
+  
+    if (out != dump_sz)
+    {
+      Serial.println("tx_data error: BAD_LEN");
+      print_hexbuf(dump_buf, dump_sz);
+      return BAD_LEN;
+    }
 
-  if (out != dump_sz)
-  {
-    Serial.println("tx_data error: BAD_LEN");
+    /*
+    if (data_len > 0)
+    {
+      Serial.print("tx_data SUCCESS frame ");
+      Serial.print(frame);
+      Serial.print(" remaining ");
+      Serial.println(data_len);
+    }
+    else
+    {
+      Serial.println("tx_data SUCCESS");
+    }
     print_hexbuf(dump_buf, dump_sz);
-    return BAD_LEN;
+    */
+    dump_sz = 0;
+    frame++;
   }
 
-  // Serial.println("tx_data SUCCESS");
-  // print_hexbuf(dump_buf, dump_sz);
-  dump_sz = 0;
   return SUCCESS;
 }
 
