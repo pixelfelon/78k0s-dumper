@@ -82,11 +82,61 @@ r78kkx2_work (void)
     print_hexbuf(res, res_sz);
   }
 
-  // VERIFY COMMAND
-  int pages256 = 4;
+  // CHECKSUM COMMAND
   byte cmd[6] = { 0 };
-  cmd[4] = pages256 - 1;
+  cmd[1] = 0x00;
+  cmd[2] = 0x00;
+  cmd[4] = 0x00;
+  cmd[5] = 0xff;
+  err = tx_command(0xB0, cmd, sizeof(cmd));
+  // delayMicroseconds(0);
+  // digitalWrite(POWER_PIN, false);
+  // digitalWrite(POWER_PIN, true);
+  if (!err) err = rx_status(&stat);
+  if (stat != 6 || err)
+  {
+    Serial.print("Bad Checksum status: ");
+    if (err) err_print(err);
+    else Serial.println(stat);
+    return;
+  }
+  res_sz = sizeof(res);
+  err = rx_data(res, &res_sz);
+  if ((res_sz != 2) || err)
+  {
+    Serial.print("Bad Checksum result: ");
+    if (err) err_print(err);
+    else Serial.println(res_sz);
+    return;
+  }
+  else
+  {
+    Serial.print("Checksum result: ");
+    print_hexbuf(res, 2);
+  }
+
+  // VERIFY TOMFOOLERY
+  // Now we are getting somewhere -
+  // Completely wrong verify data takes 20us longer to process than completely right one.
+  // One or two bytes correct and the rest wrong looks about the same as all wrong.
+  // 6% of bytes wrong - takes about 10us longer.
+  // Not the most favorable relation, but clearly this is somehow dependent on timing.
+  cmd[0] = 0;
+  cmd[1] = 0xE0;
+  cmd[2] = 0;
+  cmd[3] = 0;
+  cmd[4] = 0xE0;
   cmd[5] = 0xFF;
+  Serial.println("---");
+  for (int i = 0; i < 256; i++)
+  {
+    block[i] = 0xFF;
+  }
+  for (int i = 0; i < 256; i+=15)
+  {
+    block[i] = 0xFE;
+  }
+  // block[0] = 0xFE;
   err = tx_command(0x13, cmd, sizeof(cmd));
   if (!err) err = rx_status(&stat);
   if (stat != 6 || err)
@@ -96,77 +146,27 @@ r78kkx2_work (void)
     else Serial.println(stat);
     return;
   }
-  for (int i = 0; i < pages256; i++)
+  delayMicroseconds(12);
+  err = tx_data(block, 256, false);
+  if (err)
   {
-    delayMicroseconds(12);
-    err = tx_data(block, 256, ((i == (pages256 - 1)) ? false : true));
-    if (err)
-    {
-      Serial.print("Failed to transmit Verify data: ");
-      err_print(err);
-      return;
-    }
-    res_sz = sizeof(res);
-    err = rx_data(res, &res_sz);
-    if ((res[0] != 6) || (res_sz != 2) || err)
-    {
-      Serial.print("Bad Verify result: ");
-      if (err) err_print(err);
-      else Serial.println(stat);
-      return;
-    }
-    else
-    {
-      Serial.print("Verify result (");
-      Serial.print(i);
-      Serial.print("): ");
-      Serial.println(res[1]);
-    }
+    Serial.print("Failed to transmit Verify data: ");
+    err_print(err);
+    return;
   }
-  return;
-
-  // VERIFY TOMFOOLERY
-  cmd[0] = 0;
-  cmd[1] = 0;
-  cmd[2] = 0;
-  cmd[3] = 0;
-  cmd[4] = 0;
-  cmd[5] = 0xFF;
-  Serial.println("---");
-  for (int i = 0; i < 256; i++)
+  res_sz = sizeof(res);
+  err = rx_data(res, &res_sz);
+  if ((res[0] != 6) || (res_sz != 2) || err)
   {
-    err = tx_command(0x13, cmd, sizeof(cmd));
-    if (!err) err = rx_status(&stat);
-    if (stat != 6 || err)
-    {
-      Serial.print("Bad Verify status: ");
-      if (err) err_print(err);
-      else Serial.println(stat);
-      return;
-    }
-    delayMicroseconds(12);
-    block[0] = i;
-    err = tx_data(block, 256, false);
-    if (err)
-    {
-      Serial.print("Failed to transmit Verify data: ");
-      err_print(err);
-      return;
-    }
-    res_sz = sizeof(res);
-    err = rx_data(res, &res_sz);
-    if ((res[0] != 6) || (res_sz != 2) || err)
-    {
-      Serial.print("Bad Verify result: ");
-      if (err) err_print(err);
-      else Serial.println(stat);
-      return;
-    }
-    else
-    {
-      Serial.print("Verify result: ");
-      Serial.println(res[1]);
-    }
+    Serial.print("Bad Verify result: ");
+    if (err) err_print(err);
+    else Serial.println(stat);
+    return;
+  }
+  else
+  {
+    Serial.print("Verify result: ");
+    Serial.println(res[1]);
   }
 }
 
