@@ -75,17 +75,17 @@ void setup() {
   Serial.println("## Unadulterated checksum:");
   for (int p = 0; p < 16; p++)
   {
-    printf("# Of pages [0, %d]:\n", p);
-    printf("0x%04X\n", readChecksum(p, 0xFF));
-    printf("0x%04X\n", readChecksum(p, 0xFF));
-    printf("0x%04X\n", readChecksum(p, 0xFF));
+    printf("# Of pages [0, %d]:\r\n", p);
+    printf("0x%04X\r\n", readChecksum(p, 0xFF));
+    printf("0x%04X\r\n", readChecksum(p, 0xFF));
+    printf("0x%04X\r\n", readChecksum(p, 0xFF));
   }
 
   bool ok;
   int b, a, d;
   for (b = 0; b < 16; b++) {
     for (a = 0; a < 256; a++) {
-      for (d = 0; d < 256; d++) {
+      for (d = 255; d >= 0; d--) {
         data[a] = d;
         ok = programDataByte(b, a, d);
         delayMicroseconds(1);
@@ -98,7 +98,9 @@ void setup() {
       }
       if (d == 256)
       {
-        Serial.println("you're fucked");
+        Serial.println("Failed to find correct byte!?");
+        snprintf(buf, sizeof(buf), "(For 0x%02X%02X)", b, a);
+        Serial.println(buf);
         break;
       }
     }
@@ -417,7 +419,8 @@ uint8_t receiveByte() {
   // Check parity
   if (parity != calculateEvenParity(value)) {
     // Handle parity error
-    Serial.println("parity fucked");
+    Serial.println("bad parity");
+    // (i guess we don't handle it)
   }
 
   // Wait for stop bit
