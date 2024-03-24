@@ -84,14 +84,13 @@ r78kkx2_work (void)
 
   // CHECKSUM COMMAND
   byte cmd[6] = { 0 };
-  cmd[1] = 0x00;
+  cmd[0] = 0x00;
+  cmd[1] = 0xEF;
   cmd[2] = 0x00;
-  cmd[4] = 0x00;
+  cmd[3] = 0x00;
+  cmd[4] = 0xEF;
   cmd[5] = 0xff;
   err = tx_command(0xB0, cmd, sizeof(cmd));
-  // delayMicroseconds(0);
-  // digitalWrite(POWER_PIN, false);
-  // digitalWrite(POWER_PIN, true);
   if (!err) err = rx_status(&stat);
   if (stat != 6 || err)
   {
@@ -100,6 +99,11 @@ r78kkx2_work (void)
     else Serial.println(stat);
     return;
   }
+  //delayMicroseconds(0);
+  //digitalWrite(POWER_PIN, false);
+  //delayMicroseconds(10);
+  //digitalWrite(POWER_PIN, true);
+  //analogWriteFrequency(PWM_PIN, 800000);
   res_sz = sizeof(res);
   err = rx_data(res, &res_sz);
   if ((res_sz != 2) || err)
@@ -115,28 +119,53 @@ r78kkx2_work (void)
     print_hexbuf(res, 2);
   }
 
+  /*
+  // BLOCK BLANK CHECK COMMAND
+  int blknum = 0;
+  for (blknum = 0; blknum < 64; blknum++)
+  {
+    cmd[0] = 0x00;
+    cmd[1] = blknum * 4;
+    cmd[2] = 0x00;
+    cmd[3] = 0x00;
+    cmd[4] = blknum * 4 + 3;
+    cmd[5] = 0xff;
+    err = tx_command(0x32, cmd, sizeof(cmd));
+    delay(3);
+    if (!err) err = rx_status(&stat);
+    if (((stat != 6) && (stat != 0x1B)) || err)
+    {
+      Serial.print("Bad BlankChk status: ");
+      if (err) err_print(err);
+      else Serial.println(stat);
+      return;
+    }
+  }
+  //*/
+
   // VERIFY TOMFOOLERY
-  // Now we are getting somewhere -
-  // Completely wrong verify data takes 20us longer to process than completely right one.
-  // One or two bytes correct and the rest wrong looks about the same as all wrong.
-  // 6% of bytes wrong - takes about 10us longer.
-  // Not the most favorable relation, but clearly this is somehow dependent on timing.
-  cmd[0] = 0;
-  cmd[1] = 0xE0;
-  cmd[2] = 0;
-  cmd[3] = 0;
-  cmd[4] = 0xE0;
+  // Now we're REALLY getting somewhere -
+  // The MCU will verify exactly however many bytes you send it, as long as that's
+  // a multiple of four, regardless of what range you told it in the command frame.
+  // This does mean you have to start on a 256-byte alignment.
+  // No observed exploitable timing within those 4 bytes, unfortunately.
+  cmd[0] = 0x00;
+  cmd[1] = 0xEF;
+  cmd[2] = 0x00;
+  cmd[3] = 0x00;
+  cmd[4] = 0xEF;
   cmd[5] = 0xFF;
   Serial.println("---");
   for (int i = 0; i < 256; i++)
   {
     block[i] = 0xFF;
   }
-  for (int i = 0; i < 256; i+=15)
+  // block[0] = 0;
+  // block[3] = 0;
+  for (int i = 0; i < 32; i++)
   {
-    block[i] = 0xFE;
+    // block[i] = 0x00;
   }
-  // block[0] = 0xFE;
   err = tx_command(0x13, cmd, sizeof(cmd));
   if (!err) err = rx_status(&stat);
   if (stat != 6 || err)
