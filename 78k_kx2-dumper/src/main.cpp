@@ -141,7 +141,7 @@ byte program[1024] = {
 };
 
 
-[[noreturn]] void
+void
 setup ()
 {
 	Serial.begin(115200); // Initialize the serial monitor for debugging
@@ -155,6 +155,7 @@ setup ()
 	Serial.println("===");
 
 	r78kkx2_run();
+	// ReSharper disable once CppDFAEndlessLoop
 	while (true)
 	{
 		int b = UART_SERIAL.read();
